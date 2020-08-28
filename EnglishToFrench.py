@@ -4,6 +4,12 @@ from __future__ import division , print_function , unicode_literals
 
 import argparse
 
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+# import tensorflow.compat.v1 as tf
+# tf.disable_v2_behavior()
+# import tensorflow.compat.v1.keras as keras
+# import tensorflow.compat.v1.keras.layers as layers
 import tensorflow as tf
 import tensorflow.keras as keras
 import tensorflow.keras.layers as layers
@@ -13,7 +19,7 @@ import time
 from tensorflow.keras.preprocessing.sequence import pad_sequences 
 from sklearn.model_selection import train_test_split
 import sys
-tf.enable_eager_execution()
+import pickle
 
 print(tf.__version__)
 
@@ -34,7 +40,7 @@ def preprocess_sentence(sent):
 
 def create_dataset(file):
     data = open(file).read().strip()
-    lines = data.decode("utf-8").split("\n")
+    lines = data.split("\n")
     lines = lines[:max_examples]
     data_sep = [line.split("\t") for line in lines]
     en = [var[0] for var in data_sep]
@@ -62,17 +68,10 @@ class Language():
         self.indx2word = {ind : word for word , ind in self.word2indx.items()}
 
 def GRU(num_units):
-    if tf.test.is_gpu_available():
-        gru = layers.CuDNNGRU(num_units ,  return_sequences=True, 
-                               return_state=True, 
-                               #recurrent_activation='sigmoid',  
-                               recurrent_initializer='glorot_uniform')
-    else :
-        input("im here")
-        gru = layers.GRU(num_units , return_sequences=True, 
-                               return_state=True, reset_after = True,
-                               #recurrent_activation='sigmoid' , 
-                               recurrent_initializer='glorot_uniform')
+    gru = layers.GRU(num_units , return_sequences=True, 
+                            return_state=True, reset_after = True,
+                            #recurrent_activation='sigmoid' , 
+                            recurrent_initializer='glorot_uniform')
     return gru
 
 class Encoder(keras.Model):
@@ -185,16 +184,16 @@ def training(encoder , decoder , optimizer , languages , n_epoch , log_dir ):
             variables = encoder.variables + decoder.variables
             gradients = tape.gradient(loss , variables)
             optimizer.apply_gradients(zip(gradients , variables))
-            display.clear_output(wait=True)
-            tf.contrib.summary.scalar(tensor=loss , name="Loss")
-            tf.contrib.summary.scalar("Accuracy" , accuracy )
+            #display.clear_output(wait=True)
+            #tf.contrib.summary.scalar(tensor=loss , name="Loss")
+            #tf.contrib.summary.scalar("Accuracy" , accuracy )
             print('Epoch {} Batch {} Loss {:.4f} Accuracy : {} Time : {} '.format(epoch + 1,
                                                         batch,
                                                         batch_loss.numpy(),
                                                         accuracy , time.time() - start))    
         if (epoch + 1) % 1 == 0:
             checkpoint.save("model.ckpt")
-        display.clear_output(wait=True)
+        #display.clear_output(wait=True)
         result_epoch = 'Epoch {} Loss {:.4f} Accuracy : {} '.format(epoch + 1,
                                             total_loss / n_batches , accuracy)
 
@@ -234,10 +233,10 @@ def translate(sentence):
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--translate" , type=bool
+    "--translate" , action='store_true' , default=False
 )
 parser.add_argument(
-    "--train" , type=bool , default=False
+    "--train" , action='store_true' , default=False
 )
 parser.add_argument(
     "--file" , type=str , default=None
@@ -246,7 +245,7 @@ parser.add_argument(
     "--fileCheckpoint" , type=str , default=None
 )
 parser.add_argument(
-    "--cont" , type=bool , default=True
+    "--NoContinue" , action='store_false' , default=True
 )
 
 if __name__ == "__main__":
@@ -256,33 +255,60 @@ if __name__ == "__main__":
     if args.fileCheckpoint :
         file_checkpoint = args.fileCheckpoint
     
-    data = create_dataset(filename)
-    languages = [Language(lang) for lang in data]
+    dataReady = False
 
-    eng_train , eng_val , fr_train , fr_val = prepareSequences( data , languages)
+    if not os.path.exists('languageData.p'):
+        ## Find Data
+        if not os.path.exists('FraDataset.p'):
+            if os.path.exists(filename) :
+                data = create_dataset(filename)
+            else :
+                print("NO DATASET FOUND! Exiting")
+                exit()
+            pickle.dump(data , open('FraDataset.p', 'wb'))
+        else:
+            data = pickle.load(open('FraDataset.p'))
+    
+        languages = [Language(lang) for lang in data]
+        pickle.dump(languages, open('languageData.p', 'wb'))
+        dataReady = True    
+    else:
+        if os.path.exists('FraDataset.p'):
+            data = pickle.load(open('FraDataset.p'))
+        elif os.path.exists(filename):
+            data = create_dataset(filename)
+        else:
+            print("NO DATASET FOUND! Exiting")
+            exit()
+        languages = pickle.load(open('languageData.p', 'rb'))
 
-    num_examples = len([ len(seq) for seq in eng_train])
     batch_size = 100
-    n_batches = num_examples // batch_size
-
-    dataset = prepareDataset(batch_size , eng_train , fr_train)
+    
+    if args.train and dataReady:
+        eng_train , eng_val , fr_train , fr_val = prepareSequences( data , languages)
+        num_examples = len([ len(seq) for seq in eng_train])
+        n_batches = num_examples // batch_size
+        dataset = prepareDataset(batch_size , eng_train , fr_train)
     
     encoder=Encoder(len(languages[0].vocab) + 1 , batch_size=batch_size , embedding_dim=250 , n_neurons=1000)
     decoder=Decoder(len(languages[1].vocab) + 1 , batch_size=batch_size , embedding_dim=250 , dec_units=1000)
-    optimizer = tf.train.AdamOptimizer()
+    optimizer = tf.optimizers.Adam()
     checkpoint = tf.train.Checkpoint(encoder=encoder , decoder=decoder , optimizer=optimizer)
     
-    if args.cont :
+    if not args.NoContinue :
         checkpoint.restore(file_checkpoint)
     if args.train :
+        if not dataReady :
+            print("Data Not Ready ! Exitting")
+            exit()
         n_epoch = 1
         training(encoder , decoder , optimizer , languages , n_epoch , "TFLogs/")
     if args.translate :
         inp = str()
-        print("Helllo    gfdfgdf")
+        print("Type in english! Type exit to leave")
         while(inp.lower() != "exit"):
             inp = input(">>")
-            #try :
-            print(translate(inp))
-            #except :
-            #    print("ERROR ! Could Not Translate" , sys.exc_info()[0])
+            try:
+                print(translate(inp))
+            except KeyError as k:
+                print("Word not Interpretted! Error : {}".format(k))
