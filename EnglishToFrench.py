@@ -158,8 +158,8 @@ def training(encoder , decoder , optimizer , languages , n_epoch , log_dir ):
         for batch , (inp , targ) in enumerate(dataset):
             start = time.time()
             loss = 0
-            hidden1 = tf.zeros(shape=(batch_size, 1000))
-            hidden2 = tf.zeros(shape=(batch_size, 1000 // 2))
+            hidden1 = tf.zeros(shape=(batch_size, layer_size))
+            hidden2 = tf.zeros(shape=(batch_size, layer_size // 2))
             size = 0.0
             with tf.GradientTape() as tape:
                 enc_outputs , enc_state1 , enc_state2 = encoder(inp , hidden1 , hidden2)
@@ -205,8 +205,8 @@ def translate(sentence):
     sentence = [sentence]
     sentence = pad_sequences(sentence , padding="post" , maxlen=30 )
     
-    hidden1 = tf.zeros(shape=(1, 1000))
-    hidden2 = tf.zeros(shape=(1, 1000 // 2))
+    hidden1 = tf.zeros(shape=(1, layer_size))
+    hidden2 = tf.zeros(shape=(1, layer_size // 2))
     
     enc_outputs , state1 , state2 = encoder(sentence , hidden1 , hidden2)
     
@@ -267,31 +267,35 @@ if __name__ == "__main__":
                 exit()
             pickle.dump(data , open('FraDataset.p', 'wb'))
         else:
-            data = pickle.load(open('FraDataset.p'))
+            data = pickle.load(open('FraDataset.p', 'rb'))
     
         languages = [Language(lang) for lang in data]
         pickle.dump(languages, open('languageData.p', 'wb'))
         dataReady = True    
     else:
-        if os.path.exists('FraDataset.p'):
-            data = pickle.load(open('FraDataset.p'))
-        elif os.path.exists(filename):
-            data = create_dataset(filename)
-        else:
-            print("NO DATASET FOUND! Exiting")
-            exit()
+        if args.train :
+            if os.path.exists('FraDataset.p'):
+                data = pickle.load(open('FraDataset.p', 'rb'))
+            elif os.path.exists(filename):
+                data = create_dataset(filename)
+                pickle.dump(data , open('FraDataset.p', 'wb'))
+            else:
+                print("NO DATASET FOUND! Exiting")
+                exit()
+            dataReady = True
         languages = pickle.load(open('languageData.p', 'rb'))
 
-    batch_size = 100
-    
+    batch_size = 50
+    layer_size = 500
+
     if args.train and dataReady:
         eng_train , eng_val , fr_train , fr_val = prepareSequences( data , languages)
         num_examples = len([ len(seq) for seq in eng_train])
         n_batches = num_examples // batch_size
         dataset = prepareDataset(batch_size , eng_train , fr_train)
     
-    encoder=Encoder(len(languages[0].vocab) + 1 , batch_size=batch_size , embedding_dim=250 , n_neurons=1000)
-    decoder=Decoder(len(languages[1].vocab) + 1 , batch_size=batch_size , embedding_dim=250 , dec_units=1000)
+    encoder=Encoder(len(languages[0].vocab) + 1 , batch_size=batch_size , embedding_dim=200 , n_neurons=layer_size)
+    decoder=Decoder(len(languages[1].vocab) + 1 , batch_size=batch_size , embedding_dim=200 , dec_units=layer_size)
     optimizer = tf.optimizers.Adam()
     checkpoint = tf.train.Checkpoint(encoder=encoder , decoder=decoder , optimizer=optimizer)
     
